@@ -1,5 +1,4 @@
 # 3D AR effects with Google Mediapipe in Python
-![python-mediapipe-ar](https://github.com/aprithul/mediapipe-3d-ar-effect-demo/assets/8151229/c2076166-d8b6-43c7-9ef2-0bcc758f7538)
 
 ### Description
 This is a Python application that demonstrates the use of Google's Mediapipe to create 3D AR effects. Mediapipe solution for Python doesn't have the capability to easily render 3D AR effects. The basic landmark detection works in the screen space cooridnate system which isn't ideal for 3D effects. However, it's also possible to get the face from the landmark detection results. This application does the following:
