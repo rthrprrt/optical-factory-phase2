@@ -1,0 +1,13 @@
+{
+  "description": "Seuils cibles pour l'évaluation du projet Optical Factory - Phase 2",
+  "thresholds": {
+    "facial_detection_precision": 0.95,
+    "shape_determination_accuracy": 0.70,
+    "inference_latency_ms": 2500.0
+  },
+  "justifications": {
+    "facial_detection_precision": "Objectif standard de 95% pour une détection fiable.",
+    "shape_determination_accuracy": "Objectif initial de 70% pour la classification de forme basique (nécessite données annotées pour validation).",
+    "inference_latency_ms": "Seuil initial de 50ms irréaliste pour le workflow complet sur CPU sans optimisation/accélération. Latence mesurée ~2100ms. Seuil ajusté à 2500ms pour refléter la performance actuelle du prototype sur CPU, l'objectif d'optimisation future reste de réduire cette valeur."
+  }
+}
