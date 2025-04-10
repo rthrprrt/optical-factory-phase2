@@ -1,6 +1,8 @@
 # src/api/endpoints.py
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, status, Body
+# src/api/endpoints.py
+
+from fastapi import APIRouter, UploadFile, File, HTTPException, status, Body, Form, Response
 # Importe la nouvelle logique et les schémas mis à jour
 from src.core.processing import analyze_face_from_image_bytes, get_recommendations_for_face, get_recommendations_based_on_analysis
 from src.schemas.schemas import FaceAnalysisResult, RecommendationResult, RecommendationRequest, AnalyzeAndRecommendResult # Ajoute AnalyzeAndRecommendResult
