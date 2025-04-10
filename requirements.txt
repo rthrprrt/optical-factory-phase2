@@ -9,3 +9,8 @@ pytest>=7.0.0
 httpx>=0.23.0 # Nécessaire pour TestClient de FastAPI
 # Dépendances pour le benchmark
 requests>=2.28.0
+# ... autres dépendances ...
+pyrender>=0.1.45
+trimesh>=3.9.0 # Ou une version compatible
+# Pillow est souvent nécessaire pour pyrender/trimesh pour gérer les textures
+Pillow>=9.0.0

@@ -1,21 +1,25 @@
 # src/api/endpoints.py
 
-# src/api/endpoints.py
-
 from fastapi import APIRouter, UploadFile, File, HTTPException, status, Body, Form, Response
 # Importe la nouvelle logique et les schémas mis à jour
 from src.core.processing import analyze_face_from_image_bytes, get_recommendations_for_face, get_recommendations_based_on_analysis
-from src.schemas.schemas import FaceAnalysisResult, RecommendationResult, RecommendationRequest, AnalyzeAndRecommendResult # Ajoute AnalyzeAndRecommendResult
+# Importe la fonction de rendu
+from src.core.rendering import render_overlay
+# Importe pour obtenir le chemin du modèle
+from src.core.models import get_3d_model_path
+from src.schemas.schemas import FaceAnalysisResult, RecommendationResult, RecommendationRequest, AnalyzeAndRecommendResult
 import logging
 from typing import Optional
+import cv2 # Pour le décodage/encodage d'image
+import numpy as np # Pour manipuler l'image
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # --- Endpoint d'Analyse (Simple - Retourne Pose + Landmarks + Forme) ---
 @router.post(
-    "/analyze_face",
-    response_model=FaceAnalysisResult, # Utilise le schéma mis à jour
+    "/analyze_face", # Nom corrigé ici
+    response_model=FaceAnalysisResult,
     summary="Analyse une image pour détecter pose, landmarks et forme du visage",
     tags=["Analysis"]
 )
@@ -34,12 +38,15 @@ async def analyze_face_endpoint(
 
     analysis_result = analyze_face_from_image_bytes(image_bytes)
 
-    # Toujours retourner un objet FaceAnalysisResult, même en cas d'erreur interne
-    if not analysis_result.detection_successful and "interne" in (analysis_result.error_message or ""):
+    # Gestion d'erreur: Si une erreur interne survient (ex: modèle non chargé),
+    # il est préférable de retourner 500 pour signaler un problème serveur.
+    if not analysis_result.detection_successful and "interne" in (analysis_result.error_message or "").lower():
          logger.error(f"[analyze_face] Erreur interne: {analysis_result.error_message}")
-         # Ne pas lever d'exception en cas d'erreur interne
+         # Lève une exception 500 pour indiquer une erreur serveur
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=analysis_result.error_message)
     elif not analysis_result.detection_successful:
          logger.info(f"[analyze_face] Analyse non réussie: {analysis_result.error_message}")
+         # Retourne 200 mais avec le résultat indiquant l'échec
     else:
         logger.info("[analyze_face] Analyse réussie.")
 
@@ -68,32 +75,101 @@ async def recommend_glasses_endpoint(
     logger.info(f"[recommend_glasses] Réponse : {response}")
     return response
 
+# --- Endpoint de Rendu (Utilise la logique de rendering.py) ---
 @router.post(
     "/render_glasses",
-    summary="Superpose des lunettes sur une image de visage",
-    tags=["Visualization"]
+    summary="Superpose un modèle de lunettes 3D sur une image via analyse faciale",
+    tags=["Rendering"],
+    response_description="Image au format JPEG avec les lunettes superposées",
+    responses={
+        200: {"content": {"image/jpeg": {}}},
+        400: {"description": "Requête invalide (ex: image vide/invalide, échec détection)"},
+        404: {"description": "Modèle 3D (ID) non trouvé"},
+        500: {"description": "Erreur interne (modèle ML non chargé, erreur rendu)"}
+    }
 )
 async def render_glasses_endpoint(
-    image_file: UploadFile = File(...),
-    glasses_id: str = Form(..., description="ID du modèle de lunettes à superposer")
+    # Reçoit l'image et l'ID via Form car c'est du multipart/form-data
+    image_file: UploadFile = File(..., description="Fichier image de fond (visage)"),
+    model_id: str = Form(..., description="ID du modèle de lunettes à superposer (ex: sunglass_model_1)")
 ):
     """
-    Accepte une image et un ID de lunettes, puis retourne l'image avec les lunettes superposées.
+    Accepte une image et un ID de modèle 3D.
+    1. Analyse l'image pour trouver la pose du visage.
+    2. Rend le modèle 3D spécifié à la pose détectée.
+    3. Superpose le rendu sur l'image originale.
+    4. Retourne l'image résultante au format JPEG.
     """
+    logger.info(f"[render_glasses] Requête reçue pour modèle '{model_id}' sur fichier: {image_file.filename}")
+
+    # 1. Lire l'image d'entrée
     image_bytes = await image_file.read()
     if not image_bytes:
-        raise HTTPException(status_code=400, detail="Le fichier image fourni est vide.")
-    
-    result_image, error = overlay_glasses_on_image(image_bytes, glasses_id)
-    if error:
-        raise HTTPException(status_code=400, detail=error)
-    
-    return Response(content=result_image, media_type="image/jpeg")
+        logger.warning("[render_glasses] Fichier image vide reçu.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Le fichier image fourni est vide.")
 
-# --- Endpoint Combiné (Analyse + Recommandation) (Nouveau) ---
+    # Décoder l'image pour l'analyse et le rendu de fond
+    image_np = np.frombuffer(image_bytes, np.uint8)
+    background_cv_image = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
+    if background_cv_image is None:
+        logger.warning("[render_glasses] Impossible de décoder l'image d'entrée.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Format d'image invalide ou corrompu.")
+
+    # 2. Analyser l'image pour obtenir la pose
+    analysis_result = analyze_face_from_image_bytes(image_bytes)
+
+    # Vérifier les erreurs d'analyse
+    if not analysis_result.detection_successful:
+         error_detail = analysis_result.error_message or "Échec de la détection faciale"
+         if "interne" in error_detail.lower() or "modèle non disponible" in error_detail.lower():
+             logger.error(f"[render_glasses] Erreur interne pré-rendu: {error_detail}")
+             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error_detail)
+         else: # Erreur liée à l'image
+             logger.warning(f"[render_glasses] Échec détection faciale: {error_detail}")
+             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_detail)
+
+    if analysis_result.facial_transformation_matrix is None:
+         logger.error("[render_glasses] Matrice de pose manquante malgré détection réussie.")
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Erreur interne: Matrice de pose non obtenue.")
+
+    # Convertir la matrice de pose en NumPy array
+    pose_matrix = np.array(analysis_result.facial_transformation_matrix)
+
+    # 3. Vérifier si l'ID du modèle 3D est valide AVANT d'appeler le rendu
+    if get_3d_model_path(model_id) is None:
+         logger.warning(f"[render_glasses] ID modèle 3D '{model_id}' non trouvé.")
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Modèle 3D avec ID '{model_id}' non trouvé.")
+
+    # 4. Appeler la fonction de rendu du module 'rendering'
+    logger.info(f"[render_glasses] Appel de la fonction render_overlay pour modèle {model_id}...")
+    rendered_image = render_overlay(
+        background_image=background_cv_image,
+        face_pose_matrix=pose_matrix,
+        model_id=model_id
+    )
+
+    # 5. Gérer le résultat du rendu
+    if rendered_image is None:
+         logger.error(f"[render_glasses] La fonction render_overlay a retourné None pour le modèle '{model_id}'.")
+         # L'erreur spécifique (chargement modèle ou rendu) devrait être logguée dans rendering.py
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Erreur lors du rendu de la superposition 3D.")
+
+    # 6. Encoder l'image résultante en JPEG
+    logger.info("[render_glasses] Encodage de l'image résultante...")
+    success, encoded_image = cv2.imencode(".jpg", rendered_image)
+    if not success:
+         logger.error("[render_glasses] Échec de l'encodage JPEG.")
+         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Erreur lors de l'encodage de l'image de sortie.")
+
+    # 7. Retourner l'image binaire
+    logger.info("[render_glasses] Retour de l'image JPEG.")
+    return Response(content=encoded_image.tobytes(), media_type="image/jpeg")
+
+
+# --- Endpoint Combiné (Analyse + Recommandation) ---
 @router.post(
     "/analyze_and_recommend",
-    response_model=AnalyzeAndRecommendResult, # Utilise le nouveau schéma combiné
+    response_model=AnalyzeAndRecommendResult,
     summary="Analyse une image et recommande des lunettes basées sur la forme détectée",
     tags=["Combined Workflow"]
 )
@@ -110,15 +186,12 @@ async def analyze_and_recommend_endpoint(
         logger.warning("[analyze_and_recommend] Fichier image vide.")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Le fichier image fourni est vide.")
 
-    # 1. Effectuer l'analyse complète
     analysis_result = analyze_face_from_image_bytes(image_bytes)
 
     # Ne pas lever d'exception en cas d'erreur interne
-    if not analysis_result.detection_successful and "interne" in (analysis_result.error_message or ""):
+    if not analysis_result.detection_successful and "interne" in (analysis_result.error_message or "").lower():
          logger.error(f"[analyze_and_recommend] Erreur interne durant l'analyse: {analysis_result.error_message}")
-         # Ne PAS lever d'exception, continuer avec l'analyse échouée
 
-    # 2. Générer les recommandations si l'analyse a réussi et la forme est trouvée
     recommendation_result: Optional[RecommendationResult] = None
     if analysis_result.detection_successful and analysis_result.detected_face_shape and "erreur" not in analysis_result.detected_face_shape:
         recommendation_result = get_recommendations_based_on_analysis(analysis_result)
@@ -126,16 +199,17 @@ async def analyze_and_recommend_endpoint(
             logger.info("[analyze_and_recommend] Recommandations générées.")
         else:
             logger.warning("[analyze_and_recommend] Analyse réussie mais impossible de générer des recommandations.")
-            # On peut ajouter une info à l'analyse
             analysis_result.error_message = (analysis_result.error_message or "") + " Impossible de générer des recommandations."
     else:
-         logger.info("[analyze_and_recommend] Analyse non réussie ou forme non déterminée, pas de recommandations.")
-         # L'erreur est déjà dans analysis_result.error_message si l'analyse a échoué
+         if not analysis_result.detection_successful:
+             logger.info("[analyze_and_recommend] Analyse non réussie, pas de recommandations.")
+         else: # Analyse OK mais forme non déterminée
+            logger.info("[analyze_and_recommend] Forme non déterminée, pas de recommandations.")
+            if not analysis_result.error_message:
+                analysis_result.error_message = "Forme du visage non déterminée."
 
-    # 3. Construire la réponse combinée
     final_response = AnalyzeAndRecommendResult(
         analysis=analysis_result,
         recommendation=recommendation_result
     )
-
     return final_response

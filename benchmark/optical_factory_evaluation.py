@@ -1,5 +1,5 @@
 # benchmark/optical_factory_evaluation.py
-
+import sys
 import requests # Pour faire les appels API
 import json
 import time
@@ -7,115 +7,97 @@ import numpy as np
 from pathlib import Path
 import logging
 import os
-from typing import List # <--- AJOUTER CETTE LIGNE
+from typing import List # Assure que List est importé
+# Importe l'objet settings depuis la configuration centrale
+from src.core.config import settings
 
-# --- Configuration ---
-API_BASE_URL = "http://localhost:8000" # L'URL où tourne ton API FastAPI
+# --- Configuration (Utilise l'objet settings) ---
+API_BASE_URL = settings.API_BASE_URL if hasattr(settings, 'API_BASE_URL') else "http://localhost:8000"
 ANALYZE_RECOMMEND_ENDPOINT = f"{API_BASE_URL}/api/v1/analyze_and_recommend"
-TEST_DATA_DIR = Path(__file__).parent / "test_data" # Chemin vers les images de test
-OUTPUT_REPORT_PATH = Path(__file__).parent / "evaluation_results.json"
-CONFIG_CRITERIA_PATH = Path(__file__).parent.parent / "config" / "evaluation_criteria.json" # Chemin vers les critères cibles
+# Construit le chemin des données de test à partir de BASE_DIR de settings
+TEST_DATA_DIR = settings.BASE_DIR / "benchmark" / "test_data"
+# Construit le chemin du rapport de sortie à partir de BASE_DIR
+OUTPUT_REPORT_PATH = settings.BASE_DIR / "benchmark" / "evaluation_results.json"
+# Récupère les seuils cibles directement depuis settings
+TARGET_CRITERIA = {
+    "facial_detection_precision": settings.TARGET_DETECTION_PRECISION,
+    "inference_latency_ms": settings.TARGET_LATENCY_MS,
+    # Ajoute d'autres seuils si définis dans l'objet Settings
+    "shape_determination_accuracy": settings.SHAPE_DETERMINATION_ACCURACY if hasattr(settings, 'SHAPE_DETERMINATION_ACCURACY') else 0.70,
+}
 
-# Configuration du logging pour le benchmark
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configuration du logging (utilise le niveau de log de settings)
+logging.basicConfig(level=settings.LOG_LEVEL, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("benchmark")
 
-# --- Chargement des Critères Cibles ---
-def load_target_criteria():
-    """ Charge les seuils cibles depuis le fichier JSON de configuration. """
-    default_criteria = {
-        "facial_detection_precision": 0.95, # % de détections réussies
-        "shape_determination_accuracy": 0.70, # % de formes correctes (si ground truth dispo)
-        "inference_latency_ms": 50.0, # ms
-        # Ajoute d'autres critères ici si définis dans le JSON
-    }
-    try:
-        # Assure-toi que le dossier config existe
-        os.makedirs(CONFIG_CRITERIA_PATH.parent, exist_ok=True)
-        if CONFIG_CRITERIA_PATH.exists():
-            with open(CONFIG_CRITERIA_PATH, 'r') as f:
-                config_data = json.load(f)
-                # TODO: Extraire les valeurs du JSON et les fusionner/remplacer les défauts
-                # Exemple: default_criteria.update(config_data.get("thresholds", {}))
-                logger.info(f"Critères cibles chargés depuis {CONFIG_CRITERIA_PATH}")
-                return default_criteria # Retourne les critères chargés/mis à jour
-        else:
-            logger.warning(f"Fichier {CONFIG_CRITERIA_PATH} non trouvé. Utilisation des seuils par défaut.")
-            # Crée un fichier par défaut si absent
-            with open(CONFIG_CRITERIA_PATH, 'w') as f:
-                 json.dump({"description": "Seuils cibles pour l'évaluation", "thresholds": default_criteria, "justifications": {}}, f, indent=2)
-            return default_criteria
-    except Exception as e:
-        logger.error(f"Erreur lors du chargement de {CONFIG_CRITERIA_PATH}: {e}. Utilisation des seuils par défaut.")
-        return default_criteria
-
-TARGET_CRITERIA = load_target_criteria()
+# La fonction load_target_criteria n'est plus nécessaire car on utilise settings
 
 # --- Fonctions d'Évaluation ---
 
 def evaluate_detection_and_shape(test_image_paths: List[Path]) -> dict:
     """
     Évalue la réussite de la détection et potentiellement la précision de la forme.
-
-    Critères Grille Évaluation:
-        - Précision de détection faciale (>95% de succès sur les images attendues)
-        - (Optionnel) Précision de la forme (si ground truth disponible)
     """
     logger.info(f"Évaluation de la détection/forme sur {len(test_image_paths)} images...")
     results = []
     successful_detections = 0
-    correct_shapes = 0 # Nécessite une vérité terrain (ground truth)
+    # correct_shapes = 0 # Pourrait être réintroduit si ground truth
     total_processed = 0
 
     for image_path in test_image_paths:
         if not image_path.is_file():
-            logger.warning(f"Fichier non trouvé : {image_path}, ignoré.")
+            logger.warning(f"Fichier non trouvé ou n'est pas un fichier : {image_path}, ignoré.")
             continue
 
         total_processed += 1
         try:
             with open(image_path, "rb") as f:
-                files = {"image_file": (image_path.name, f, f"image/{image_path.suffix.strip('.')}")}
-                response = requests.post(ANALYZE_RECOMMEND_ENDPOINT, files=files, timeout=10) # Timeout de 10s
+                # Détermine le type MIME de manière simple basé sur l'extension
+                extension = image_path.suffix.lower().strip('.')
+                mime_type = f"image/{extension}" if extension in ['jpg', 'jpeg', 'png', 'bmp'] else 'application/octet-stream'
+                files = {"image_file": (image_path.name, f, mime_type)}
+                response = requests.post(ANALYZE_RECOMMEND_ENDPOINT, files=files, timeout=15) # Augmente un peu le timeout
 
-            response.raise_for_status() # Lève une exception pour les codes d'erreur HTTP >= 400
-            data = response.json()
-            analysis_data = data.get("analysis", {})
-            detected_shape = analysis_data.get("detected_face_shape")
-            is_success = analysis_data.get("detection_successful", False)
+            # Vérifie si le code status est 2xx (succès)
+            if 200 <= response.status_code < 300:
+                data = response.json()
+                analysis_data = data.get("analysis", {})
+                detected_shape = analysis_data.get("detected_face_shape")
+                is_success = analysis_data.get("detection_successful", False)
+                error_msg = analysis_data.get("error_message")
 
-            results.append({
-                "image": image_path.name,
-                "status_code": response.status_code,
-                "detection_successful": is_success,
-                "detected_shape": detected_shape
-            })
+                results.append({
+                    "image": image_path.name,
+                    "status_code": response.status_code,
+                    "detection_successful": is_success,
+                    "detected_shape": detected_shape,
+                    "error_message": error_msg
+                })
 
-            if is_success:
-                successful_detections += 1
-                # --- Comparaison avec vérité terrain (si disponible) ---
-                # Exemple : si le nom du fichier contient la forme attendue
-                # expected_shape = image_path.stem.split('_')[-1] # Suppose '..._ovale.jpg'
-                # if detected_shape and detected_shape.lower() == expected_shape.lower():
-                #    correct_shapes += 1
+                if is_success:
+                    successful_detections += 1
+                    # --- Comparaison Ground Truth (placeholder) ---
+            else:
+                 # Gère les erreurs API (4xx, 5xx)
+                 logger.error(f"Erreur API {response.status_code} pour {image_path.name}: {response.text[:200]}") # Loggue début de réponse
+                 results.append({"image": image_path.name, "status_code": response.status_code, "error": response.text[:200]})
 
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout API pour {image_path.name}")
+            results.append({"image": image_path.name, "status_code": "Timeout", "error": "Request timed out"})
         except requests.exceptions.RequestException as e:
-            logger.error(f"Erreur API pour {image_path.name}: {e}")
-            results.append({"image": image_path.name, "status_code": "API Error", "error": str(e)})
+            logger.error(f"Erreur de connexion API pour {image_path.name}: {e}")
+            results.append({"image": image_path.name, "status_code": "Connection Error", "error": str(e)})
         except Exception as e:
-             logger.error(f"Erreur inattendue pour {image_path.name}: {e}")
+             logger.error(f"Erreur inattendue lors du traitement de {image_path.name}: {e}", exc_info=True)
              results.append({"image": image_path.name, "status_code": "Script Error", "error": str(e)})
 
     # Calcul des métriques
     detection_precision = (successful_detections / total_processed) if total_processed > 0 else 0
-    # shape_accuracy = (correct_shapes / successful_detections) if successful_detections > 0 else 0 # Si ground truth
-
     threshold = TARGET_CRITERIA.get("facial_detection_precision", 0.95)
     status = "Atteint" if detection_precision >= threshold else "Non atteint"
-
     logger.info(f"Précision détection: {detection_precision:.2%}")
 
-    # Retourne les résultats formatés
     return {
         "metric": "facial_detection_precision",
         "value": detection_precision,
@@ -125,71 +107,69 @@ def evaluate_detection_and_shape(test_image_paths: List[Path]) -> dict:
             "total_images": total_processed,
             "successful_detections": successful_detections,
             "individual_results": results
-            # "shape_accuracy": shape_accuracy # Si calculée
         }
     }
 
 def evaluate_inference_latency(test_image_paths: List[Path], num_runs: int = 10) -> dict:
     """
     Évalue la latence moyenne d'inférence en appelant l'API plusieurs fois.
-
-    Critère Grille Évaluation: Latence < 50 ms (cible très ambitieuse pour ce workflow)
     """
     logger.info(f"Évaluation de la latence sur {num_runs} appels...")
     latencies = []
-    # Utilise la première image valide pour les tests de latence
     valid_image_path = next((p for p in test_image_paths if p.is_file()), None)
 
     if not valid_image_path:
         logger.error("Aucune image valide trouvée pour le test de latence.")
-        return {"metric": "inference_latency_ms", "value": -1, "status": "Erreur", "details": "Pas d'image"}
+        return {"metric": "inference_latency_ms", "value": -1, "status": "Erreur", "details": "Pas d'image valide"}
 
-    # Chauffe : effectue un premier appel pour potentiellement charger des caches, etc.
+    # Appel de chauffe
     try:
         with open(valid_image_path, "rb") as f:
-            files = {"image_file": (valid_image_path.name, f, f"image/{valid_image_path.suffix.strip('.')}")}
-            requests.post(ANALYZE_RECOMMEND_ENDPOINT, files=files, timeout=10)
-    except requests.exceptions.RequestException as e:
-         logger.error(f"Erreur lors de l'appel de chauffe pour latence : {e}")
-         # Ne pas arrêter, essayer quand même les runs chronométrés
+            extension = valid_image_path.suffix.lower().strip('.')
+            mime_type = f"image/{extension}" if extension in ['jpg', 'jpeg', 'png', 'bmp'] else 'application/octet-stream'
+            files = {"image_file": (valid_image_path.name, f, mime_type)}
+            requests.post(ANALYZE_RECOMMEND_ENDPOINT, files=files, timeout=15)
+    except Exception as e:
+         logger.warning(f"Erreur lors de l'appel de chauffe pour latence (continuons): {e}")
 
-    # Mesures réelles
+    # Mesures
     for i in range(num_runs):
         try:
             start_time = time.perf_counter()
             with open(valid_image_path, "rb") as f:
-                files = {"image_file": (valid_image_path.name, f, f"image/{valid_image_path.suffix.strip('.')}")}
-                response = requests.post(ANALYZE_RECOMMEND_ENDPOINT, files=files, timeout=10)
-                response.raise_for_status() # Vérifie si l'appel a réussi
+                extension = valid_image_path.suffix.lower().strip('.')
+                mime_type = f"image/{extension}" if extension in ['jpg', 'jpeg', 'png', 'bmp'] else 'application/octet-stream'
+                files = {"image_file": (valid_image_path.name, f, mime_type)}
+                response = requests.post(ANALYZE_RECOMMEND_ENDPOINT, files=files, timeout=15)
+                response.raise_for_status() # Lève une exception si status >= 400
             end_time = time.perf_counter()
             latency_ms = (end_time - start_time) * 1000
             latencies.append(latency_ms)
             logger.debug(f"Run {i+1}/{num_runs}: Latence = {latency_ms:.2f} ms")
-            # Petite pause pour éviter de surcharger ? Optionnel.
-            # time.sleep(0.1)
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout API lors du run {i+1} de latence.")
         except requests.exceptions.RequestException as e:
             logger.error(f"Erreur API lors du run {i+1} de latence: {e}")
         except Exception as e:
-            logger.error(f"Erreur inattendue lors du run {i+1} de latence: {e}")
+            logger.error(f"Erreur script lors du run {i+1} de latence: {e}", exc_info=True)
 
-
-    if not latencies:
-        logger.error("Aucune mesure de latence réussie.")
-        avg_latency = -1
-        status = "Erreur"
-    else:
+    # Calcul du résultat
+    avg_latency = -1
+    status = "Erreur"
+    if latencies:
         avg_latency = np.mean(latencies)
-        threshold = TARGET_CRITERIA.get("inference_latency_ms", 50.0)
+        threshold = TARGET_CRITERIA.get("inference_latency_ms", 50.0) # Garde seuil par défaut si non défini
         status = "Atteint" if avg_latency <= threshold else "Non atteint"
-        logger.info(f"Latence moyenne: {avg_latency:.2f} ms")
-
+        logger.info(f"Latence moyenne ({len(latencies)} runs): {avg_latency:.2f} ms")
+    else:
+        logger.error("Aucune mesure de latence réussie.")
 
     return {
         "metric": "inference_latency_ms",
         "value": avg_latency,
         "threshold": threshold,
         "status": status,
-        "details": {"num_runs": num_runs, "latencies_ms": latencies}
+        "details": {"num_runs_requested": num_runs, "num_runs_successful": len(latencies), "latencies_ms": latencies}
     }
 
 # --- Fonction Principale du Benchmark ---
@@ -202,26 +182,43 @@ def generate_evaluation_report(test_data_path: Path):
     report = {
         "project": "Optical Factory",
         "evaluation_date": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "api_url": API_BASE_URL,
+        "api_url": API_BASE_URL, # Depuis settings
         "test_data_source": str(test_data_path),
+        "target_criteria": TARGET_CRITERIA, # Inclut les seuils utilisés
         "metrics": []
     }
 
-    # Récupère la liste des fichiers images de test
+    # Vérifie si le dossier de données existe
+    if not test_data_path.is_dir():
+        logger.error(f"Le dossier de données de test n'existe pas : {test_data_path}")
+        report["error"] = f"Dossier de données de test non trouvé: {test_data_path}"
+        return report
+
+    # Récupère la liste des fichiers images
     image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
-    test_image_paths = [p for p in test_data_path.glob("*") if p.suffix.lower() in image_extensions]
+    # Utilise rglob pour chercher aussi dans les sous-dossiers si nécessaire, sinon glob
+    test_image_paths = [p for p in test_data_path.glob("*") if p.is_file() and p.suffix.lower() in image_extensions]
 
     if not test_image_paths:
-        logger.error(f"Aucun fichier image trouvé dans {test_data_path}")
+        logger.error(f"Aucun fichier image ({', '.join(image_extensions)}) trouvé dans {test_data_path}")
         report["error"] = "Aucune image de test trouvée."
         return report
 
-    # --- Exécute les évaluations ---
-    report["metrics"].append(evaluate_detection_and_shape(test_image_paths))
-    report["metrics"].append(evaluate_inference_latency(test_image_paths, num_runs=10))
+    logger.info(f"{len(test_image_paths)} images trouvées pour l'évaluation.")
 
-    # Ajoute d'autres métriques ici si besoin
-    # Ex: evaluate_memory_usage(), evaluate_algorithmic_fairness()
+    # --- Exécute les évaluations ---
+    try:
+        report["metrics"].append(evaluate_detection_and_shape(test_image_paths))
+    except Exception as e:
+        logger.error(f"Erreur lors de l'évaluation detection/shape: {e}", exc_info=True)
+        report["metrics"].append({"metric": "facial_detection_precision", "status": "Erreur Script", "error": str(e)})
+
+    try:
+        report["metrics"].append(evaluate_inference_latency(test_image_paths, num_runs=10))
+    except Exception as e:
+        logger.error(f"Erreur lors de l'évaluation de latence: {e}", exc_info=True)
+        report["metrics"].append({"metric": "inference_latency_ms", "status": "Erreur Script", "error": str(e)})
+
 
     # --- Calcule le résumé global ---
     total_criteria = len(report["metrics"])
@@ -238,25 +235,37 @@ def generate_evaluation_report(test_data_path: Path):
 # --- Exécution du Script ---
 
 if __name__ == "__main__":
-    # Vérifie si l'API est accessible avant de lancer
+    # Vérifie si l'API est accessible
+    logger.info(f"Vérification de l'API à {API_BASE_URL}...")
+    api_ok = False
     try:
         response = requests.get(f"{API_BASE_URL}/health", timeout=5)
-        response.raise_for_status()
-        if response.json().get("status") != "ok":
-            raise ValueError("API health check failed.")
-        logger.info("API joignable, lancement du benchmark...")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"ERREUR: Impossible de joindre l'API à {API_BASE_URL}. Vérifiez qu'elle est lancée.")
+        response.raise_for_status() # Lève pour 4xx/5xx
+        health_data = response.json()
+        if health_data.get("status") == "ok":
+            api_ok = True
+            logger.info(f"API joignable et health check OK (modèles chargés: {health_data.get('models_loaded', 'Inconnu')}).")
+        else:
+            logger.error(f"API joignable mais health check a échoué: {health_data}")
+    except requests.exceptions.Timeout:
+        logger.error(f"ERREUR: Timeout en essayant de joindre l'API à {API_BASE_URL}.")
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"ERREUR: Impossible de se connecter à l'API à {API_BASE_URL}. Vérifiez qu'elle est lancée et accessible.")
         logger.error(f"Détail: {e}")
-        exit(1) # Arrête le script si l'API n'est pas là
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Erreur lors de la requête vers l'API: {e}")
     except Exception as e:
-        logger.error(f"Erreur lors de la vérification de l'API: {e}")
-        exit(1)
+         logger.error(f"Erreur inattendue lors de la vérification de l'API: {e}", exc_info=True)
 
-    # Génère et affiche le rapport
-    final_report = generate_evaluation_report(TEST_DATA_DIR)
+    if not api_ok:
+        logger.error("Le benchmark ne peut pas continuer car l'API n'est pas prête.")
+        exit(1) # Arrête le script
 
-    # Affiche un résumé dans la console
+    # Génère le rapport
+    logger.info(f"Lancement de la génération du rapport avec les données de {TEST_DATA_DIR}...")
+    final_report = generate_evaluation_report(TEST_DATA_DIR) # Utilise TEST_DATA_DIR global
+
+    # Affiche le résumé
     print("\n" + "="*15 + " RÉSUMÉ DE L'ÉVALUATION " + "="*15)
     summary = final_report.get("summary", {})
     print(f"Critères Atteints: {summary.get('criteria_met', 0)} / {summary.get('total_criteria_evaluated', 0)}")
@@ -264,16 +273,26 @@ if __name__ == "__main__":
     print("\nDétail par Métrique:")
     for metric_result in final_report.get("metrics", []):
         value = metric_result.get('value', 'N/A')
-        if isinstance(value, float) and value != -1:
-            value_str = f"{value:.2f}" if metric_result['metric'] != "facial_detection_precision" else f"{value:.2%}"
-        else:
-            value_str = str(value)
-        print(f"  - {metric_result.get('metric', 'Inconnue')}: {value_str} (Seuil: {metric_result.get('threshold', 'N/A')}) -> {metric_result.get('status', 'N/A')}")
+        value_str = "N/A"
+        if isinstance(value, (int, float)) and value != -1 : # Vérifie si c'est un nombre valide
+             if metric_result.get('metric') == "facial_detection_precision":
+                 value_str = f"{value:.2%}"
+             elif metric_result.get('metric') == "inference_latency_ms":
+                 value_str = f"{value:.2f} ms"
+             else:
+                 value_str = f"{value:.2f}" # Format générique pour d'autres métriques
+        elif value == -1:
+             value_str = "Erreur Calcul"
 
-    # Sauvegarde le rapport complet en JSON
+        print(f"  - {metric_result.get('metric', 'Inconnue'):<30}: {value_str:<15} (Seuil: {metric_result.get('threshold', 'N/A')}) -> {metric_result.get('status', 'N/A')}")
+
+    # Sauvegarde le rapport
+    logger.info(f"Sauvegarde du rapport dans {OUTPUT_REPORT_PATH}...")
     try:
+        # Crée le dossier parent si nécessaire
+        OUTPUT_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(OUTPUT_REPORT_PATH, "w") as f:
             json.dump(final_report, f, indent=2)
-        logger.info(f"Rapport d'évaluation complet sauvegardé dans : {OUTPUT_REPORT_PATH}")
+        logger.info(f"Rapport d'évaluation complet sauvegardé.")
     except Exception as e:
-        logger.error(f"Erreur lors de la sauvegarde du rapport JSON : {e}")
+        logger.error(f"Erreur lors de la sauvegarde du rapport JSON : {e}", exc_info=True)
