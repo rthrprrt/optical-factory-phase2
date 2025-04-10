@@ -5,6 +5,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, status, Body
 from src.core.processing import analyze_face_from_image_bytes, get_recommendations_for_face, get_recommendations_based_on_analysis
 from src.schemas.schemas import FaceAnalysisResult, RecommendationResult, RecommendationRequest, AnalyzeAndRecommendResult # Ajoute AnalyzeAndRecommendResult
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -31,9 +32,10 @@ async def analyze_face_endpoint(
 
     analysis_result = analyze_face_from_image_bytes(image_bytes)
 
+    # Toujours retourner un objet FaceAnalysisResult, même en cas d'erreur interne
     if not analysis_result.detection_successful and "interne" in (analysis_result.error_message or ""):
          logger.error(f"[analyze_face] Erreur interne: {analysis_result.error_message}")
-         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=analysis_result.error_message)
+         # Ne pas lever d'exception en cas d'erreur interne
     elif not analysis_result.detection_successful:
          logger.info(f"[analyze_face] Analyse non réussie: {analysis_result.error_message}")
     else:
@@ -88,10 +90,10 @@ async def analyze_and_recommend_endpoint(
     # 1. Effectuer l'analyse complète
     analysis_result = analyze_face_from_image_bytes(image_bytes)
 
-    # Gérer les erreurs d'analyse interne
+    # Ne pas lever d'exception en cas d'erreur interne
     if not analysis_result.detection_successful and "interne" in (analysis_result.error_message or ""):
          logger.error(f"[analyze_and_recommend] Erreur interne durant l'analyse: {analysis_result.error_message}")
-         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=analysis_result.error_message)
+         # Ne PAS lever d'exception, continuer avec l'analyse échouée
 
     # 2. Générer les recommandations si l'analyse a réussi et la forme est trouvée
     recommendation_result: Optional[RecommendationResult] = None

@@ -7,7 +7,7 @@ from mediapipe.tasks.python.vision import FaceLandmarkerResult # Importe le type
 from src.core.models import get_face_landmarker
 # Importe les schémas mis à jour
 from src.schemas.schemas import FaceAnalysisResult, Landmark, RecommendationResult
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import logging
 import math # Pour les calculs de distance
 
@@ -105,7 +105,7 @@ def determine_face_shape(landmarks: List[Landmark]) -> str:
         return "erreur_calcul"
 
 
-# --- Analyse Faciale (Mise à jour - Inchangée par rapport à la version précédente) ---
+# --- Analyse Faciale (Mise à jour pour mieux gérer les erreurs de format et d'initialisation) ---
 
 def analyze_face_from_image_bytes(image_bytes: bytes) -> FaceAnalysisResult:
     """
@@ -120,10 +120,15 @@ def analyze_face_from_image_bytes(image_bytes: bytes) -> FaceAnalysisResult:
         return FaceAnalysisResult(detection_successful=False, error_message="Erreur interne: Modèle non disponible.")
 
     try:
-        image_np = np.frombuffer(image_bytes, np.uint8)
-        image_cv = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
-        if image_cv is None:
-            logger.warning("Impossible de décoder l'image.")
+        # Valider le format de l'image avant tout
+        try:
+            image_np = np.frombuffer(image_bytes, np.uint8)
+            image_cv = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
+            if image_cv is None:
+                logger.warning("Impossible de décoder l'image.")
+                return FaceAnalysisResult(detection_successful=False, error_message="Format d'image invalide.")
+        except Exception as e:
+            logger.warning(f"Erreur de décodage de l'image: {e}")
             return FaceAnalysisResult(detection_successful=False, error_message="Format d'image invalide.")
 
         image_rgb = cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB)

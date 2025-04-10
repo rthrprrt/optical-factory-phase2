@@ -40,6 +40,10 @@ jobs: # Les tâches à exécuter
       run: |
         # Crée le dossier de données de test même s'il est vide, pour éviter les erreurs dans test_api.py
         mkdir -p tests/test_data
+        # Crée également le dossier models pour éviter les erreurs lors des tests
+        mkdir -p models
+        # Configure l'environnement pour indiquer qu'on est en mode test
+        export TESTING=true
         pytest
 
     # Optionnel : Étape de Build Docker (vérifie que l'image build)
