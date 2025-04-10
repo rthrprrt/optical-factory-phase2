@@ -66,6 +66,27 @@ async def recommend_glasses_endpoint(
     logger.info(f"[recommend_glasses] Réponse : {response}")
     return response
 
+@router.post(
+    "/render_glasses",
+    summary="Superpose des lunettes sur une image de visage",
+    tags=["Visualization"]
+)
+async def render_glasses_endpoint(
+    image_file: UploadFile = File(...),
+    glasses_id: str = Form(..., description="ID du modèle de lunettes à superposer")
+):
+    """
+    Accepte une image et un ID de lunettes, puis retourne l'image avec les lunettes superposées.
+    """
+    image_bytes = await image_file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Le fichier image fourni est vide.")
+    
+    result_image, error = overlay_glasses_on_image(image_bytes, glasses_id)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    
+    return Response(content=result_image, media_type="image/jpeg")
 
 # --- Endpoint Combiné (Analyse + Recommandation) (Nouveau) ---
 @router.post(
