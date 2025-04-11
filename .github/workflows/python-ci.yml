@@ -13,57 +13,64 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    # Étape 1: Installer Git LFS explicitement (sécurité)
+    - name: Install Git LFS
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y git-lfs
+        git lfs install --system
+
+    # Étape 2: Checkout code avec LFS et debug
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        lfs: true # Active le checkout LFS
+        lfs: true
+    # Active le debug pour cette étape spécifique si besoin de plus d'infos
+    # env:
+    #   ACTIONS_STEP_DEBUG: true
 
-    # Étape Set up Python - CORRECTION INDENTATION ICI
+    # Étape 3: Set up Python
     - name: Set up Python
-      uses: actions/setup-python@v5 # 'uses:' doit être au même niveau que 'name:'
-      with:                      # 'with:' doit être indenté sous 'uses:'
+      uses: actions/setup-python@v5
+      with:
         python-version: '3.10'
         cache: 'pip'
-        # Ajoute la clé de cache basée sur le hash du fichier requirements
         cache-dependency-path: '**/requirements.txt'
 
-    # Étape Install dependencies - Pas de changement d'indentation ici
+    # Étape 4: Install dependencies
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # Optionnel: Linting (Commenté)
-    # - name: Lint with flake8
-    #   run: |
-    #     pip install flake8
-    #     flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-    #     flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-
-    # Étape Run Pytest - CORRECTION AJOUTÉE ICI
+    # Étape 5: Run Pytest
     - name: Run Pytest
       run: |
-        # Crée les dossiers nécessaires pour les tests et le chargement du modèle
-        mkdir -p tests/test_data
-        # Crée le dossier models car le chemin relatif est utilisé dans config
-        mkdir -p models
-        # Copie le modèle depuis le checkout LFS vers le dossier models attendu
-        # Ajuste le chemin si nécessaire (si le modèle est dans un sous-dossier de models)
-        # Note: Cette copie n'est nécessaire que si le chemin dans config.py reste relatif './models/...'
-        # Si config.py utilisait un chemin absolu basé sur BASE_DIR partout, cette copie ne serait pas utile.
-        # Vérifie que le fichier existe après checkout LFS avant de copier
-        if [ -f "models/face_landmarker_v2_with_blendshapes.task" ]; then
-          cp models/face_landmarker_v2_with_blendshapes.task models/
+        # Vérifie si le modèle existe MAINTENANT après checkout LFS
+        echo "--- Vérification de l'existence du modèle ---"
+        ls -l models/
+        if [ ! -f "models/face_landmarker_v2_with_blendshapes.task" ]; then
+           echo "::error::Modèle LFS models/face_landmarker_v2_with_blendshapes.task NON TROUVÉ après checkout!"
+           # Tente un pull manuel LFS comme dernière chance
+           echo "--- Tentative de git lfs pull manuel ---"
+           git lfs pull
+           # Re-vérifie
+           ls -l models/
+           if [ ! -f "models/face_landmarker_v2_with_blendshapes.task" ]; then
+              echo "::error::Modèle LFS toujours NON TROUVÉ après pull manuel!"
+              # exit 1 # Fait échouer si le modèle est indispensable
+           else
+              echo "Modèle trouvé après pull manuel."
+           fi
         else
-          echo "::error::Model file models/face_landmarker_v2_with_blendshapes.task not found after checkout!"
-          # exit 1 # Fait échouer le build si le modèle est absolument requis pour les tests
+            echo "Modèle LFS trouvé après checkout."
         fi
-        # Configure l'environnement pour indiquer qu'on est en mode test
-        # Cela permet au health check de retourner 'ok' même si le modèle n'a pas chargé (sécurité)
+        echo "--- Fin de la vérification ---"
+
+        # Crée les dossiers nécessaires
+        mkdir -p tests/test_data
+        # Pas besoin de créer 'models' si le checkout fonctionne
+        # Pas besoin de copier le modèle si le chemin est bien géré par config.py
+
         export TESTING=true
         pytest
-
-    # Optionnel: Build Docker (Commenté)
-    # - name: Build Docker image
-    #   run: |
-    #     docker build -t optical-factory-backend-ci .
