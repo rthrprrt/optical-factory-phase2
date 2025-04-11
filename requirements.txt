@@ -14,3 +14,4 @@ pyrender>=0.1.45
 trimesh>=3.9.0 # Ou une version compatible
 # Pillow est souvent nécessaire pour pyrender/trimesh pour gérer les textures
 Pillow>=9.0.0
+pydantic-settings>=1.0.0 # Ajoute cette ligne
