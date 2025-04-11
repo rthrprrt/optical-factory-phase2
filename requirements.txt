@@ -1,17 +1,14 @@
 fastapi>=0.90.0
 uvicorn[standard]>=0.20.0
 mediapipe>=0.10.9 # Utilise la version la plus récente ou celle compatible
-opencv-python-headless>=4.8.0 # Version headless
+opencv-python-headless>=4.8.0 # Version headless suffit pour l'analyse
 numpy>=1.21.0
-python-multipart>=0.0.6 # Pour les uploads de fichiers
+python-multipart>=0.0.6 # Pour les uploads de fichiers (toujours utile pour /analyze_face)
+pydantic-settings>=1.0.0 # Pour la configuration
+
 # Dépendances pour les tests
 pytest>=7.0.0
 httpx>=0.23.0 # Nécessaire pour TestClient de FastAPI
+
 # Dépendances pour le benchmark
 requests>=2.28.0
-# ... autres dépendances ...
-pyrender>=0.1.45
-trimesh>=3.9.0 # Ou une version compatible
-# Pillow est souvent nécessaire pour pyrender/trimesh pour gérer les textures
-Pillow>=9.0.0
-pydantic-settings>=1.0.0 # Ajoute cette ligne
