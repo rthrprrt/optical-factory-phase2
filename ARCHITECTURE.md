@@ -1,80 +1,112 @@
 # Architecture Système - Optical Factory API (Phase 2)
 
-Ce document décrit l'architecture du backend API du projet Optical Factory.
+Ce document décrit l'architecture du backend API RESTful développé pour le projet Optical Factory, Phase 2.
 
 ## 1. Vue d'Ensemble
 
-Le backend est une application **API RESTful** développée avec **FastAPI** (Python). Son rôle principal est d'analyser des images de visage pour en extraire des caractéristiques (pose 3D, landmarks, forme) et de fournir des recommandations de lunettes personnalisées. Il propose également un endpoint pour générer une image avec un modèle 3D de lunettes superposé au visage.
+Le système backend fournit une interface API pour l'analyse d'images faciales, la classification simplifiée de la forme du visage, la recommandation de modèles de lunettes et la génération d'images d'essayage virtuel. Il est développé en **Python** avec le framework **FastAPI**.
 
-L'application est conçue pour être **conteneurisée avec Docker** et intégrée dans un pipeline **CI/CD (GitHub Actions)** pour les tests automatisés.
+L'architecture vise la modularité et la maintenabilité. Elle est conçue pour être **conteneurisée avec Docker** et intègre un pipeline **CI/CD (GitHub Actions)** pour l'automatisation des tests unitaires et d'intégration.
 
-## 2. Composants Principaux
+## 2. Technologies Principales
 
-L'architecture actuelle est basée sur un service API unique (monolithe pour l'instant) structuré de manière modulaire :
+* **Framework Backend :** FastAPI
+* **Serveur ASGI :** Uvicorn
+* **Computer Vision / Analyse Faciale :** Mediapipe (FaceLandmarker)
+* **Traitement d'Image :** OpenCV-Python
+* **Modélisation & Rendu 3D :** Trimesh (chargement/manipulation), Pyrender (rendu offscreen)
+* **Validation de Données :** Pydantic
+* **Configuration :** Pydantic-Settings (via fichier `.env`)
+* **Tests :** Pytest, FastAPI TestClient, HTTPX
+* **Conteneurisation :** Docker
+* **CI/CD :** GitHub Actions
+* **Utilitaires :** NumPy, Pathlib
+
+## 3. Structure Modulaire
+
+Le code source (`src/`) est organisé en modules distincts :
 
 ```mermaid
 graph TD
-    A[Client API<br>(Ex: Frontend Web/Mobile, App Test, Benchmark)] --> B{FastAPI Backend API};
-    B --> C[API Endpoints<br>(src/api/endpoints.py)];
-    C -- Appelle --> D[Logique Métier Core<br>(src/core/processing.py)];
-    C -- Appelle --> E[Logique Rendu 3D<br>(src/core/rendering.py)];
-    D -- Utilise --> F[Modèles ML<br>(Mediapipe - src/core/models.py)];
-    D -- Appelle --> G[Détermination Forme Visage];
-    D -- Appelle --> H[Logique Recommandation];
-    E -- Utilise --> F;
-    E -- Utilise --> I[Modèles 3D<br>(Trimesh/Pyrender - src/core/models.py)];
-    B -- Utilise --> J[Schemas Pydantic<br>(src/schemas/schemas.py)];
-    F -- Chargé par --> K[Gestion Modèles<br>(src/core/models.py)];
-    I -- Chargé par --> K;
-    E -- Initialisé par --> L[Startup FastAPI<br>(src/main.py)];
-    K -- Initialisé par --> L;
+    subgraph "Client (Web/Mobile/Test App)"
+        direction LR
+        CLIENT[Client API]
+    end
+
+    subgraph "Backend API (FastAPI Application)"
+        direction TB
+        MAIN[main.py<br>Point d'Entrée, Startup/Lifespan]
+        CONFIG[config.py<br>Gestion Configuration (.env)]
+        ROUTER[api/endpoints.py<br>Routes API, Validation Requêtes/Réponses]
+        SCHEMAS[schemas/schemas.py<br>Modèles Pydantic]
+
+        subgraph "Core Logic"
+            PROCESSING[core/processing.py<br>Analyse Image, Forme Visage, Recommandation]
+            RENDERING[core/rendering.py<br>Rendu 3D, Superposition]
+            MODELS_MGMT[core/models.py<br>Chargement Modèles ML & 3D]
+        end
+
+        subgraph "Dépendances Externes"
+            MEDIAPIPE[Mediapipe<br>FaceLandmarker]
+            CV[OpenCV]
+            PYRENDER[Pyrender/Trimesh]
+            MODELS_ASSETS[Fichiers Modèles<br>(models/*.task, models/**/*.obj)]
+        end
+
+        MAIN --> ROUTER;
+        MAIN -- Initialise --> MODELS_MGMT;
+        MAIN -- Initialise --> RENDERING;
+        MAIN -- Lit --> CONFIG;
+
+        ROUTER -- Appelle --> PROCESSING;
+        ROUTER -- Appelle --> RENDERING;
+        ROUTER -- Utilise --> SCHEMAS;
+
+        PROCESSING -- Appelle --> MODELS_MGMT;
+        PROCESSING -- Utilise --> MEDIAPIPE;
+        PROCESSING -- Utilise --> CV;
+
+        RENDERING -- Appelle --> MODELS_MGMT;
+        RENDERING -- Utilise --> PYRENDER;
+        RENDERING -- Utilise --> CV;
+
+        MODELS_MGMT -- Lit --> CONFIG;
+        MODELS_MGMT -- Charge --> MODELS_ASSETS;
+    end
+
+    CLIENT --> ROUTER;
 ```
 
-- **FastAPI Backend API** (`src/main.py`) : Point d'entrée principal, gère le cycle de vie de l'application (démarrage, arrêt), configure les routes et initialise les composants (modèles, renderer).
-- **API Endpoints** (`src/api/endpoints.py`) : Définit les routes REST (`/analyze_face`, `/recommend_glasses`, `/render_glasses`, `/analyze_and_recommend`, `/health`) et gère la validation des requêtes/réponses via les schémas Pydantic.
-- **Logique Métier Core** (`src/core/processing.py`) : Contient les fonctions principales pour :
-  - L'analyse d'image avec Mediapipe (`analyze_face_from_image_bytes`).
-  - La détermination (basique) de la forme du visage (`determine_face_shape`).
-  - La génération de recommandations (`get_recommendations_for_face`, `get_recommendations_based_on_analysis`).
-- **Logique Rendu 3D** (`src/core/rendering.py`) : Gère l'initialisation de Pyrender/Trimesh, le chargement des modèles 3D, et la superposition du modèle sur l'image de fond (`render_overlay`).
-- **Gestion Modèles** (`src/core/models.py`) : Centralise le chargement du modèle Mediapipe (`get_face_landmarker`) et fournit les chemins vers les modèles 3D (`get_3d_model_path`).
-- **Schemas Pydantic** (`src/schemas/schemas.py`) : Définit la structure des données pour les requêtes et réponses API, assurant la validation automatique.
+* **main.py** : Orchestre le démarrage, charge la configuration et initialise les composants critiques (Mediapipe via models.py, Pyrender via rendering.py).
+* **config.py** : Centralise la configuration (chemins, seuils, etc.) lue depuis un fichier .env via Pydantic-Settings.
+* **api/endpoints.py** : Définit tous les endpoints RESTful, gère la réception des requêtes HTTP, la validation des données d'entrée (fichiers, JSON) via Pydantic, appelle les fonctions de logique métier appropriées et formate les réponses HTTP.
+* **schemas/schemas.py** : Contient les modèles Pydantic utilisés pour définir la structure attendue des requêtes et des réponses JSON, permettant la validation automatique et la génération de la documentation OpenAPI.
+* **core/models.py** : Responsable du chargement et de la mise à disposition des modèles externes : le modèle FaceLandmarker de Mediapipe et les chemins d'accès aux différents modèles 3D de lunettes. Utilise la configuration (config.py) pour trouver les fichiers.
+* **core/processing.py** : Cœur de la logique d'analyse. Prend les données d'image brute, utilise Mediapipe pour l'extraction des landmarks et de la matrice de pose, appelle la fonction de classification de forme (actuellement simplifiée), et contient la logique de recommandation basée sur la forme.
+* **core/rendering.py** : Gère le rendu 3D. Initialise la scène Pyrender, charge les modèles 3D via Trimesh, positionne le modèle de lunettes sélectionné en fonction de la matrice de pose du visage et d'un offset prédéfini, effectue le rendu offscreen et le compose avec l'image de fond via alpha blending (OpenCV).
 
-## 3. Dépendances Clés
+## 4. Flux de Données Principaux
 
-- **Framework API** : FastAPI, Uvicorn
-- **Computer Vision** : Mediapipe, OpenCV-Python
-- **Rendu 3D** : Pyrender, Trimesh
-- **Data Validation** : Pydantic
-- **Utilitaires** : NumPy
-- **Tests** : Pytest, HTTPX (via TestClient)
+* **Analyse (/analyze_face)** : Image -> endpoints -> processing (Mediapipe -> Landmarks/Pose -> Forme Simple) -> endpoints -> Réponse JSON (FaceAnalysisResult).
+* **Recommandation Simple (/recommend_glasses)** : Forme (JSON) -> endpoints -> processing (Logique Reco Simple) -> endpoints -> Réponse JSON (RecommendationResult).
+* **Rendu (/render_glasses)** : Image + ID Modèle (Form) -> endpoints -> processing (Analyse Pose) -> endpoints -> rendering (Chargement Modèle 3D + Rendu Pyrender + Composition OpenCV) -> endpoints -> Réponse Image Binaire (JPEG).
+* **Flux Combiné (/analyze_and_recommend)** : Image -> endpoints -> processing (Analyse Pose/Landmarks/Forme) -> endpoints -> processing (Logique Reco) -> endpoints -> Réponse JSON (AnalyzeAndRecommendResult).
 
-## 4. Flux de Données (Exemple : `/analyze_and_recommend`)
+## 5. Infrastructure et Tests
 
-1. Le client envoie une requête POST avec une image (multipart/form-data).
-2. L'endpoint (`endpoints.py`) reçoit l'image, lit les bytes.
-3. Appel à `analyze_face_from_image_bytes` (`processing.py`).
-4. `processing.py` décode l'image (OpenCV), appelle Mediapipe pour obtenir pose+landmarks.
-5. `processing.py` appelle `determine_face_shape` avec les landmarks.
-6. `processing.py` retourne l'objet `FaceAnalysisResult` (contenant pose, landmarks, forme).
-7. L'endpoint reçoit `FaceAnalysisResult`.
-8. L'endpoint appelle `get_recommendations_based_on_analysis` (`processing.py`) avec le résultat de l'analyse.
-9. `processing.py` utilise la forme détectée pour appeler `get_recommendations_for_face`.
-10. `processing.py` retourne l'objet `RecommendationResult`.
-11. L'endpoint construit l'objet final `AnalyzeAndRecommendResult` et le retourne en JSON.
+* **Conteneurisation** : Dockerfile pour créer une image isolée de l'application.
+* **CI/CD** : Workflow GitHub Actions (.github/workflows/python-ci.yml) déclenché sur push/pull request pour exécuter pytest. Gère Git LFS pour le modèle Mediapipe.
+* **Tests** : Suite de tests (tests/) utilisant pytest :
+  * Tests unitaires pour la logique de processing.py (classification de forme, recommandation) avec données simulées.
+  * Tests d'intégration pour les endpoints API (test_api.py) utilisant FastAPI.TestClient.
+* **Benchmarking** : Script (benchmark/optical_factory_evaluation.py) pour mesurer la latence et la précision de détection en appelant l'API sur un jeu de données. Génère un rapport JSON.
 
-## 5. Infrastructure et Déploiement (Actuel)
+## 6. Points d'Amélioration et Limitations Actuelles
 
-- **Conteneurisation** : Un Dockerfile est fourni pour packager l'application.
-- **CI/CD** : Un workflow GitHub Actions (`python-ci.yml`) exécute pytest automatiquement.
-- **Déploiement PaaS** : Non implémenté actuellement.
-
-## 6. Points d'Amélioration Futurs
-
-- Amélioration de l'algorithme de détermination de forme de visage.
-- Optimisation de la latence d'inférence et de rendu.
-- Amélioration de la qualité du rendu 3D (PBR, éclairage).
-- Déploiement sur une plateforme PaaS.
-- Externalisation de la configuration.
-- Extension de la couverture des tests.
-- (Optionnel) Migration vers une architecture microservices si la complexité augmente.
+* **Classification de Forme** : La logique actuelle est très simplifiée (3 catégories). Une amélioration significative nécessiterait des heuristiques plus fines ou une approche basée sur le Machine Learning (nécessitant des données annotées).
+* **Latence** : La latence mesurée pour le flux complet est de l'ordre de 2 secondes sur CPU, loin des performances temps réel (< 50ms). Des optimisations (quantification, ONNX, accélération matérielle) seraient nécessaires pour cet objectif. Le seuil actuel est ajusté pour refléter la performance du prototype.
+* **Qualité du Rendu** : Le rendu 3D est fonctionnel mais basique. L'amélioration du photoréalisme nécessiterait un travail sur les matériaux (PBR), l'éclairage de la scène et potentiellement un moteur de rendu différent ou des shaders personnalisés.
+* **Robustesse** : Pas de gestion spécifique pour les variations extrêmes d'éclairage ou les occlusions faciales importantes.
+* **Déploiement** : L'application n'est pas encore déployée sur une plateforme PaaS.
+* **Scalabilité** : L'architecture actuelle est monolithique. Pour une charge très élevée, une migration vers des microservices pourrait être envisagée.
+* **Sécurité/RGPD** : Aspects non traités spécifiquement dans cette phase.
