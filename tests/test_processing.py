@@ -4,66 +4,82 @@ import pytest
 from src.core.processing import (
     get_recommendations_for_face,
     determine_face_shape,
-    # Importe les constantes d'indices
-    TOP_MOST_POINT_INDEX,
-    BOTTOM_MOST_POINT_INDEX,
-    LEFT_MOST_POINT_INDEX,
-    RIGHT_MOST_POINT_INDEX,
-    LEFT_JAW_POINT_INDEX,
-    RIGHT_JAW_POINT_INDEX
+    # Importe les indices nécessaires
+    TOP_FOREHEAD, BOTTOM_CHIN, LEFT_TEMPLE, RIGHT_TEMPLE
 )
 from src.schemas.schemas import Landmark
+from typing import List
 
-# --- Tests pour get_recommendations_for_face (inchangés) ---
+# --- Fonctions utilitaires pour créer des landmarks simulés ---
+def create_mock_landmarks(points_map: dict, num_total_landmarks: int = 478) -> List[Landmark]:
+    landmarks = [Landmark(x=0.5, y=0.5, z=0)] * num_total_landmarks
+    for index, coords in points_map.items():
+        if 0 <= index < num_total_landmarks:
+            landmarks[index] = Landmark(x=coords[0], y=coords[1], z=coords[2] if len(coords)>2 else 0)
+        else:
+             print(f"Attention: Indice {index} hors limites pour {num_total_landmarks} landmarks.")
+    return landmarks
+
+# --- Tests pour get_recommendations_for_face (MODIFIÉS pour les formes simples V6) ---
 @pytest.mark.parametrize("face_shape, expected_ids, expected_info_part", [
-    ("ronde", ["sunglass_model_1", "sunglass_model_3"], "Ronde"),
-    ("carrée", ["sunglass_model_2"], "Carrée"),
-    ("ovale", ["sunglass_model_1", "sunglass_model_2", "sunglass_model_3"], "Ovale"),
-    ("rectangle", ["sunglass_model_2"], "Rectangle"),
-    ("coeur", ["sunglass_model_1"], "Coeur"),
+    ("long", ["sunglass_model_2", "sunglass_model_3"], "Long"),
+    ("proportionné", ["sunglass_model_1", "sunglass_model_2", "sunglass_model_3"], "Proportionné"),
+    ("autre", ["sunglass_model_1", "sunglass_model_3"], "Autre"),
     ("inconnue", ["sunglass_model_1", "sunglass_model_2"], "non reconnue"),
-    ("TRIANGLE", ["sunglass_model_1", "sunglass_model_2"], "non reconnue"),
+    ("erreur_calcul", ["sunglass_model_1", "sunglass_model_2"], "non reconnue"),
+    ("erreur_indices", ["sunglass_model_1", "sunglass_model_2"], "non reconnue"),
 ])
-def test_get_recommendations_for_face_shapes(face_shape, expected_ids, expected_info_part):
+def test_get_recommendations_for_face_shapes_simple(face_shape, expected_ids, expected_info_part):
+    """ Vérifie les recommandations pour les formes simplifiées V6. """
     recommendations, info = get_recommendations_for_face(face_shape)
     assert set(recommendations) == set(expected_ids)
-    assert expected_info_part in info
+    # Vérifie que l'information retournée contient bien le nom de la forme attendue
+    assert expected_info_part.lower() in info.lower()
 
-def test_get_recommendations_empty_shape():
-    recommendations, info = get_recommendations_for_face("")
-    assert set(recommendations) == set(["sunglass_model_1", "sunglass_model_2"])
-    assert "non reconnue" in info
+# --- Tests SIMPLIFIÉS pour determine_face_shape (V6) ---
 
-# --- Tests pour determine_face_shape (maintenant avec les constantes importées) ---
 def test_determine_face_shape_insufficient_landmarks():
-    short_landmarks = [Landmark(x=0.5, y=0.5, z=0) for _ in range(10)]
+    """ Teste avec moins de landmarks que nécessaire. """
+    short_landmarks = create_mock_landmarks({}, num_total_landmarks=10)
     shape = determine_face_shape(short_landmarks)
     assert shape == "inconnue"
 
 def test_determine_face_shape_no_landmarks():
+    """ Teste avec une liste vide. """
     shape = determine_face_shape([])
     assert shape == "inconnue"
 
-def test_determine_face_shape_simulated_square():
-    landmarks = [Landmark(x=0, y=0, z=0)] * 478 # Utilise un nombre suffisant (ex: 478 pour être sûr)
-    # Définir les points clés (utilise les constantes importées)
-    landmarks[TOP_MOST_POINT_INDEX] = Landmark(x=0.5, y=0.9, z=0)
-    landmarks[BOTTOM_MOST_POINT_INDEX] = Landmark(x=0.5, y=0.1, z=0)
-    landmarks[LEFT_MOST_POINT_INDEX] = Landmark(x=0.1, y=0.5, z=0)
-    landmarks[RIGHT_MOST_POINT_INDEX] = Landmark(x=0.9, y=0.5, z=0)
-    landmarks[LEFT_JAW_POINT_INDEX] = Landmark(x=0.15, y=0.2, z=0) # Jaw plus large pour carré
-    landmarks[RIGHT_JAW_POINT_INDEX] = Landmark(x=0.85, y=0.2, z=0)
+def test_determine_face_shape_invalid_measures():
+    """ Teste le cas où les distances calculées sont nulles. """
+    points = { TOP_FOREHEAD: (0.5, 0.5, 0), BOTTOM_CHIN: (0.5, 0.5, 0), LEFT_TEMPLE: (0.5, 0.5, 0), RIGHT_TEMPLE: (0.5, 0.5, 0) }
+    landmarks = create_mock_landmarks(points)
     shape = determine_face_shape(landmarks)
-    assert shape == "carrée"
+    assert shape == "inconnue"
 
-def test_determine_face_shape_simulated_oval():
-    landmarks = [Landmark(x=0, y=0, z=0)] * 478
-    # Définir les points clés
-    landmarks[TOP_MOST_POINT_INDEX] = Landmark(x=0.5, y=0.95, z=0)
-    landmarks[BOTTOM_MOST_POINT_INDEX] = Landmark(x=0.5, y=0.05, z=0)
-    landmarks[LEFT_MOST_POINT_INDEX] = Landmark(x=0.2, y=0.5, z=0)
-    landmarks[RIGHT_MOST_POINT_INDEX] = Landmark(x=0.8, y=0.5, z=0)
-    landmarks[LEFT_JAW_POINT_INDEX] = Landmark(x=0.3, y=0.2, z=0) # Jaw plus étroit pour ovale
-    landmarks[RIGHT_JAW_POINT_INDEX] = Landmark(x=0.7, y=0.2, z=0)
+def test_determine_face_shape_simulated_long():
+    """ L/W > 1.20 """
+    # L=1.0, CW=0.6 -> Ratio=1.67
+    points = { TOP_FOREHEAD: (0.5, 1.0, 0), BOTTOM_CHIN: (0.5, 0.0, 0), LEFT_TEMPLE: (0.2, 0.5, 0), RIGHT_TEMPLE: (0.8, 0.5, 0) }
+    landmarks = create_mock_landmarks(points)
     shape = determine_face_shape(landmarks)
-    assert shape == "ovale"
+    assert shape == "long"
+
+def test_determine_face_shape_simulated_proportionate():
+    """ 0.90 <= L/W <= 1.20 """
+    # L=0.8, CW=0.8 -> Ratio=1.0
+    points = { TOP_FOREHEAD: (0.5, 0.9, 0), BOTTOM_CHIN: (0.5, 0.1, 0), LEFT_TEMPLE: (0.1, 0.5, 0), RIGHT_TEMPLE: (0.9, 0.5, 0) }
+    landmarks = create_mock_landmarks(points)
+    shape = determine_face_shape(landmarks)
+    assert shape == "proportionné"
+
+def test_determine_face_shape_simulated_other_wide():
+    """ L/W < 0.90 """
+    # L=0.6, CW=0.8 -> Ratio=0.75
+    points = { TOP_FOREHEAD: (0.5, 0.8, 0), BOTTOM_CHIN: (0.5, 0.2, 0), LEFT_TEMPLE: (0.1, 0.5, 0), RIGHT_TEMPLE: (0.9, 0.5, 0) }
+    landmarks = create_mock_landmarks(points)
+    shape = determine_face_shape(landmarks)
+    assert shape == "autre"
+
+# Les anciens tests pour carré, rond, ovale, coeur, diamant ne sont plus pertinents
+# car la logique ne distingue plus ces formes spécifiquement.
+# On pourrait ajouter des tests aux limites des ratios RATIO_LONG et RATIO_PROP_LOW si besoin.

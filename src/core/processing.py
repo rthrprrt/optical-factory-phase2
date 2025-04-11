@@ -3,116 +3,92 @@
 import cv2
 import numpy as np
 import mediapipe as mp
-from mediapipe.tasks.python.vision import FaceLandmarkerResult # Importe le type résultat
+from mediapipe.tasks.python.vision import FaceLandmarkerResult
 from src.core.models import get_face_landmarker
-# Importe les schémas mis à jour
 from src.schemas.schemas import FaceAnalysisResult, Landmark, RecommendationResult
 from typing import List, Optional, Tuple
 import logging
-import math # Pour les calculs de distance
+import math
 
+# Utilise le logger configuré au niveau racine (ou via settings si importé)
 logger = logging.getLogger(__name__)
 
-# --- Indices des Landmarks (selon la documentation Mediapipe Face Mesh) ---
-# Ces indices peuvent être utiles pour calculer les ratios pour la forme du visage
-# Voir: https://developers.google.com/mediapipe/solutions/vision/face_landmarker#face_geometry
-# (Note: Les indices exacts peuvent varier légèrement selon les versions de modèle)
-# Exemple d'indices (à vérifier/adapter) :
-# Points extrêmes du visage pour la largeur/hauteur
-LEFT_MOST_POINT_INDEX = 356 # Environ tempe gauche
-RIGHT_MOST_POINT_INDEX = 127 # Environ tempe droite
-TOP_MOST_POINT_INDEX = 10   # Environ sommet du front
-BOTTOM_MOST_POINT_INDEX = 152 # Environ pointe du menton
-# Points pour la largeur de la mâchoire
-LEFT_JAW_POINT_INDEX = 172
-RIGHT_JAW_POINT_INDEX = 397
-# Points pour la largeur des pommettes
-LEFT_CHEEK_POINT_INDEX = 234
-RIGHT_CHEEK_POINT_INDEX = 454
+# --- Indices des Landmarks (Seulement ceux nécessaires pour L/W) ---
+TOP_FOREHEAD = 10
+BOTTOM_CHIN = 152
+LEFT_TEMPLE = 234 # Point externe pommette gauche
+RIGHT_TEMPLE = 454 # Point externe pommette droite
 
-
-# --- Détermination de la forme (Implémentation Basique - Logique Ajustée) ---
-
-def distance(p1: Landmark, p2: Landmark) -> float:
+# --- Fonction Distance ---
+def distance(p1: Optional[Landmark], p2: Optional[Landmark]) -> float:
     """ Calcule la distance Euclidienne 2D entre deux landmarks (ignore z). """
-    # Ajout d'une vérification pour éviter les erreurs si p1 ou p2 est None (peu probable avec List[Landmark])
     if p1 is None or p2 is None:
+        logger.warning("Tentative de calcul de distance avec un point None.")
+        return 0.0
+    if not all(hasattr(p, attr) for p in [p1, p2] for attr in ['x', 'y']):
+        logger.warning("Landmark(s) invalide(s) fourni(s) à la fonction distance.")
         return 0.0
     return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
 
+# --- Logique Simplifiée V6 pour determine_face_shape ---
 def determine_face_shape(landmarks: List[Landmark]) -> str:
     """
-    Détermine la forme du visage à partir des landmarks.
-    (Implémentation très basique basée sur des ratios largeur/hauteur - v2 Logique).
+    Détermine une forme de visage simplifiée (Long, Proportionné, Autre)
+    basée principalement sur le ratio Longueur/Largeur.
     """
-    if not landmarks or len(landmarks) < 468: # Assure qu'on a les points attendus
-        logger.warning("Nombre insuffisant de landmarks pour déterminer la forme du visage.")
-        return "inconnue"
-
-    try:
-        # Récupérer les points clés
-        top_point = landmarks[TOP_MOST_POINT_INDEX]
-        bottom_point = landmarks[BOTTOM_MOST_POINT_INDEX]
-        left_point = landmarks[LEFT_MOST_POINT_INDEX]
-        right_point = landmarks[RIGHT_MOST_POINT_INDEX]
-        left_jaw = landmarks[LEFT_JAW_POINT_INDEX]
-        right_jaw = landmarks[RIGHT_JAW_POINT_INDEX]
-
-        # Calculer les dimensions
-        face_height = distance(top_point, bottom_point)
-        face_width = distance(left_point, right_point)
-        jaw_width = distance(left_jaw, right_jaw)
-
-        if face_height <= 1e-6 or face_width <= 1e-6: # Utilise une petite tolérance au lieu de 0
-             logger.warning("Dimensions faciales invalides (proches de zéro).")
-             return "inconnue"
-
-        # Calculer les ratios
-        height_width_ratio = face_height / face_width
-        jaw_face_width_ratio = jaw_width / face_width
-
-        logger.info(f"Ratios calculés : H/W={height_width_ratio:.2f}, Jaw/W={jaw_face_width_ratio:.2f}")
-
-        # Classification très simpliste (Logique v2 - Ajustée)
-        shape = "inconnue" # Défaut
-        if abs(height_width_ratio - 1.0) < 0.15: # Visage plutôt proportionné en H/W (Ratio ~1.0)
-            if jaw_face_width_ratio >= 0.75: # Mâchoire large
-                 shape = "carrée"
-            else: # Mâchoire plus étroite
-                 shape = "ronde"
-        elif height_width_ratio >= 1.15: # Visage clairement plus haut que large (Ratio > ~1.15)
-            if jaw_face_width_ratio >= 0.75: # Mâchoire large
-                 shape = "rectangle"
-            # Modification ici : La condition originale pour ovale était trop large et attrapait le cas rectangle
-            elif jaw_face_width_ratio < 0.72: # Mâchoire significativement plus étroite pour ovale/coeur
-                # On pourrait ajouter une logique pour coeur ici si on avait la largeur du front
-                shape = "ovale" # Considère ovale comme le cas "long et étroit"
-            else: # Cas intermédiaire (mâchoire ni très large ni très étroite)
-                shape = "ovale" # Peut aussi être ovale
-
-        # Ajouter des cas si H < W ?
-        # elif height_width_ratio < 0.9:
-        #    shape = "triangle_inverse"
-
-        logger.info(f"Forme de visage déterminée (basique - v2 ajustée) : {shape}")
+    shape = "inconnue" # Forme par défaut
+    # Vérification basique du nombre de landmarks
+    if not landmarks or len(landmarks) < max(TOP_FOREHEAD, BOTTOM_CHIN, LEFT_TEMPLE, RIGHT_TEMPLE) + 1:
+        logger.warning(f"Nombre insuffisant de landmarks ({len(landmarks)} fournis) pour les indices requis.")
         return shape
 
+    try:
+        # Récupérer seulement les points nécessaires
+        p_top_forehead = landmarks[TOP_FOREHEAD]
+        p_bottom_chin = landmarks[BOTTOM_CHIN]
+        p_left_temple = landmarks[LEFT_TEMPLE]
+        p_right_temple = landmarks[RIGHT_TEMPLE]
+
+        # Calculer longueur et largeur principale
+        face_length = distance(p_top_forehead, p_bottom_chin)
+        cheekbone_width = distance(p_left_temple, p_right_temple) # Largeur max approx
+
+        # Gérer division par zéro ou mesures invalides
+        if face_length < 1e-6 or cheekbone_width < 1e-6:
+            logger.warning(f"Mesures faciales invalides (L={face_length:.2f}, W={cheekbone_width:.2f}).")
+            return "inconnue"
+
+        length_width_ratio = face_length / cheekbone_width
+        logger.info(f"Ratio L/W calculé (simple) : {length_width_ratio:.2f}")
+
+        # --- Classification Simplifiée V6 ---
+        RATIO_LONG = 1.20 # Seuil pour considérer "long"
+        RATIO_PROP_LOW = 0.90 # Borne inférieure pour "proportionné"
+
+        if length_width_ratio > RATIO_LONG:
+            shape = "long"
+        elif length_width_ratio >= RATIO_PROP_LOW: # Implicitement <= RATIO_LONG
+            shape = "proportionné"
+        else: # ratio < RATIO_PROP_LOW
+            shape = "autre"
+
+        logger.info(f"Forme de visage déterminée (v6 simple) : {shape}")
+        return shape.lower()
+
     except IndexError:
-        logger.error("Erreur d'indice lors de l'accès aux landmarks. Le modèle a-t-il changé ?", exc_info=True)
+        logger.error(f"Erreur d'indice lors de l'accès aux landmarks (indices requis jusqu'à {max(TOP_FOREHEAD, BOTTOM_CHIN, LEFT_TEMPLE, RIGHT_TEMPLE)}).", exc_info=True)
         return "erreur_indices"
     except Exception as e:
         logger.error(f"Erreur inattendue lors de la détermination de la forme : {e}", exc_info=True)
         return "erreur_calcul"
 
-
-# --- Analyse Faciale (Mise à jour pour mieux gérer les erreurs de format et d'initialisation) ---
-
+# --- Analyse Faciale (Utilise la forme simplifiée) ---
 def analyze_face_from_image_bytes(image_bytes: bytes) -> FaceAnalysisResult:
     """
     Analyse une image (fournie en bytes) pour détecter la pose du visage,
-    les landmarks, et déterminer la forme du visage.
+    les landmarks, et déterminer la forme du visage (simplifiée).
     """
-    logger.info("Début de l'analyse faciale (landmarks + pose + forme)...")
+    logger.info("Début de l'analyse faciale (landmarks + pose + forme simple)...")
     landmarker = get_face_landmarker()
 
     if landmarker is None:
@@ -120,17 +96,16 @@ def analyze_face_from_image_bytes(image_bytes: bytes) -> FaceAnalysisResult:
         return FaceAnalysisResult(detection_successful=False, error_message="Erreur interne: Modèle non disponible.")
 
     try:
-        # Valider le format de l'image avant tout
-        try:
-            image_np = np.frombuffer(image_bytes, np.uint8)
-            image_cv = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
-            if image_cv is None:
-                logger.warning("Impossible de décoder l'image.")
-                return FaceAnalysisResult(detection_successful=False, error_message="Format d'image invalide.")
-        except Exception as e:
-            logger.warning(f"Erreur de décodage de l'image: {e}")
-            return FaceAnalysisResult(detection_successful=False, error_message="Format d'image invalide.")
+        image_np = np.frombuffer(image_bytes, np.uint8)
+        image_cv = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
+        if image_cv is None:
+            logger.warning("Impossible de décoder l'image.")
+            return FaceAnalysisResult(detection_successful=False, error_message="Format d'image invalide ou corrompu.")
+    except Exception as e:
+        logger.error(f"Erreur lors du décodage de l'image: {e}", exc_info=True)
+        return FaceAnalysisResult(detection_successful=False, error_message="Erreur de décodage image.")
 
+    try:
         image_rgb = cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
 
@@ -150,15 +125,21 @@ def analyze_face_from_image_bytes(image_bytes: bytes) -> FaceAnalysisResult:
 
             if detection_result.face_landmarks and len(detection_result.face_landmarks) > 0:
                 landmarks_raw = detection_result.face_landmarks[0]
-                landmarks_list = [Landmark(x=lm.x, y=lm.y, z=lm.z) for lm in landmarks_raw]
-                detected_shape = determine_face_shape(landmarks_list)
-                if "erreur" in detected_shape:
-                    error_msg = f"Erreur lors de la détermination de la forme ({detected_shape})."
-                success = True
-                logger.info("Visage détecté, landmarks extraits.")
+                if landmarks_raw:
+                     landmarks_list = [Landmark(x=lm.x, y=lm.y, z=lm.z) for lm in landmarks_raw if hasattr(lm, 'x')]
+                     # Appelle la fonction de détermination de forme SIMPLIFIÉE V6
+                     detected_shape = determine_face_shape(landmarks_list)
+                     if "erreur" in detected_shape:
+                         error_msg = f"Erreur de calcul de forme ({detected_shape})."
+                     success = True
+                     logger.info("Visage détecté, landmarks extraits.")
+                else:
+                    logger.warning("Landmarks vides retournés par Mediapipe.")
+                    error_msg = "Données landmarks invalides."
+                    success = False
             else:
                 logger.warning("Pose détectée mais pas de landmarks extraits.")
-                error_msg = "Pose détectée mais landmarks non disponibles."
+                error_msg = "Landmarks non disponibles."
                 success = False
         else:
             logger.info("Aucun visage détecté dans l'image.")
@@ -169,55 +150,57 @@ def analyze_face_from_image_bytes(image_bytes: bytes) -> FaceAnalysisResult:
             detection_successful=success,
             facial_transformation_matrix=matrix_list,
             face_landmarks=landmarks_list,
-            detected_face_shape=detected_shape if success and "erreur" not in (detected_shape or "") else None, # Ne retourne la forme que si succès et pas d'erreur de calcul
-            error_message=error_msg # Retourne le message d'erreur s'il y en a un
+            detected_face_shape=detected_shape if success and "erreur" not in (detected_shape or "") else None,
+            error_message=error_msg if not success or "erreur" in (detected_shape or "") else None
         )
         return analysis_result
 
     except Exception as e:
-        logger.error(f"Erreur inattendue pendant l'analyse faciale complète: {e}", exc_info=True)
-        return FaceAnalysisResult(detection_successful=False, error_message=f"Erreur interne serveur: {e}")
+        logger.error(f"Erreur inattendue pendant l'analyse faciale: {e}", exc_info=True)
+        return FaceAnalysisResult(detection_successful=False, error_message=f"Erreur serveur inattendue pendant l'analyse.")
 
 
-# --- Recommandation (Mise à jour - Inchangée par rapport à la version précédente) ---
-
+# --- Recommandation Basée sur l'Analyse (Simplifiée) ---
 def get_recommendations_based_on_analysis(analysis: FaceAnalysisResult) -> Optional[RecommendationResult]:
     """
-    Génère des recommandations basées sur les résultats de l'analyse faciale.
+    Génère des recommandations basées sur les résultats de l'analyse faciale simplifiée.
     """
-    # Vérifie que l'analyse a réussi ET que la forme a été déterminée ET qu'il n'y a pas eu d'erreur dans sa détermination
     if analysis.detection_successful and analysis.detected_face_shape and "erreur" not in analysis.detected_face_shape:
+        # Appelle la fonction de recommandation V6
         recommended_ids, analysis_info_str = get_recommendations_for_face(analysis.detected_face_shape)
         return RecommendationResult(
             recommended_glasses_ids=recommended_ids,
             analysis_info=analysis_info_str
         )
     else:
-        logger.info("Impossible de générer des recommandations car la forme du visage n'a pas été déterminée avec succès.")
+        if not analysis.detection_successful: log_msg = "Analyse faciale échouée."
+        elif not analysis.detected_face_shape: log_msg = "Forme de visage non déterminée."
+        else: log_msg = f"Erreur lors de la détermination de forme ({analysis.detected_face_shape})."
+        logger.info(f"Impossible de générer des recommandations: {log_msg}")
         return None
 
-# --- Fonction de recommandation par forme (inchangée) ---
+# --- Recommandation Basée sur Forme Simplifiée (V6) ---
 def get_recommendations_for_face(face_shape: str) -> tuple[List[str], str]:
     """
-    Génère des recommandations de lunettes basées sur la forme du visage fournie.
+    Génère des recommandations basées sur les formes simplifiées (long, proportionné, autre).
     """
-    face_shape_lower = face_shape.lower()
-    analysis_info = f"Forme de visage utilisée pour la recommandation : {face_shape_lower.capitalize()}"
-    logger.info(f"Génération de recommandations pour la forme : {face_shape_lower}")
+    face_shape_lower = face_shape.lower().strip()
+    analysis_info = f"Forme de visage simplifiée utilisée : {face_shape_lower.capitalize()}"
+    logger.info(f"Génération de recommandations pour la forme simplifiée : '{face_shape_lower}'")
 
-    if face_shape_lower == "ronde":
-        recommendations = ["sunglass_model_1", "sunglass_model_3"]
-    elif face_shape_lower == "carrée":
-        recommendations = ["sunglass_model_2"]
-    elif face_shape_lower == "ovale":
-         recommendations = ["sunglass_model_1", "sunglass_model_2", "sunglass_model_3"]
-    elif face_shape_lower == "rectangle":
-        recommendations = ["sunglass_model_2"]
-    elif face_shape_lower == "coeur":
-        recommendations = ["sunglass_model_1"]
-    else:
-        recommendations = ["sunglass_model_1", "sunglass_model_2"]
-        analysis_info = f"Forme de visage '{face_shape}' non reconnue, recommandations par défaut."
+    model1 = "sunglass_model_1" # Ex: Styles Angulaires/Rectangles
+    model2 = "sunglass_model_2" # Ex: Styles Ronds/Ovales
+    model3 = "sunglass_model_3" # Ex: Styles Pilote/Variés
 
-    logger.info(f"Recommandations générées : {recommendations}")
+    if face_shape_lower == "long": # Ovale, Rectangle -> Styles larges ou contrastants
+        recommendations = [model2, model3]
+    elif face_shape_lower == "proportionné": # Rond, Carré -> Styles contrastants
+        recommendations = [model1, model2, model3]
+    elif face_shape_lower == "autre": # Coeur, Diamant, Large -> Styles équilibrants
+        recommendations = [model1, model3]
+    else: # Inconnue, erreur_indices, erreur_calcul
+        recommendations = [model1, model2] # Défaut générique
+        analysis_info = f"Forme de visage '{face_shape}' non reconnue ou erreur, recommandations par défaut."
+
+    logger.info(f"Recommandations générées (simple) : {recommendations}")
     return recommendations, analysis_info
