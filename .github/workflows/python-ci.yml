@@ -15,7 +15,9 @@ jobs: # Les tâches à exécuter
     steps: # Les étapes séquentielles de la tâche
     - name: Checkout code # Étape 1: Récupère le code du dépôt
       uses: actions/checkout@v4 # Action standard de GitHub
-
+      with:
+          lfs: true # <<< AJOUTE ÇA
+          
     - name: Set up Python # Étape 2: Configure l'environnement Python
       uses: actions/setup-python@v5
       with:
