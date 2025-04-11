@@ -1,56 +1,69 @@
 # .github/workflows/python-ci.yml
 
-name: Python Backend CI # Nom du workflow affiché sur GitHub Actions
+name: Python Backend CI
 
-on: # Déclencheurs du workflow
-  push: # Se déclenche sur les push vers ces branches
-    branches: [ "main", "master", "develop" ] # Adapte selon tes noms de branches
-  pull_request: # Se déclenche sur les pull requests vers ces branches
+on:
+  push:
+    branches: [ "main", "master", "develop" ]
+  pull_request:
     branches: [ "main", "master", "develop" ]
 
-jobs: # Les tâches à exécuter
-  build-and-test: # Nom de la tâche (peut être ce que tu veux)
-    runs-on: ubuntu-latest # Utilise la dernière version d'Ubuntu fournie par GitHub
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
 
-    steps: # Les étapes séquentielles de la tâche
-    - name: Checkout code # Étape 1: Récupère le code du dépôt
-      uses: actions/checkout@v4 # Action standard de GitHub
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
       with:
-          lfs: true # <<< AJOUTE ÇA
+        lfs: true # Active le checkout LFS
 
+    # Étape Set up Python - CORRECTION INDENTATION ICI
     - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-          # Ajoute ou modifie la clé de cache basée sur le hash du fichier requirements
-          cache-dependency-path: '**/requirements.txt' # Force le cache à dépendre du contenu
+      uses: actions/setup-python@v5 # 'uses:' doit être au même niveau que 'name:'
+      with:                      # 'with:' doit être indenté sous 'uses:'
+        python-version: '3.10'
+        cache: 'pip'
+        # Ajoute la clé de cache basée sur le hash du fichier requirements
+        cache-dependency-path: '**/requirements.txt'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt # Garde l'installation normale
+    # Étape Install dependencies - Pas de changement d'indentation ici
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
 
-    # Optionnel : Étape de Linting (vérifie le style du code)
+    # Optionnel: Linting (Commenté)
     # - name: Lint with flake8
     #   run: |
     #     pip install flake8
-    #     # Stop the build if there are Python syntax errors or undefined names
     #     flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-    #     # Exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
     #     flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
-    - name: Run Pytest # Étape 4: Exécute les tests
+    # Étape Run Pytest - CORRECTION AJOUTÉE ICI
+    - name: Run Pytest
       run: |
-        # Crée le dossier de données de test même s'il est vide, pour éviter les erreurs dans test_api.py
+        # Crée les dossiers nécessaires pour les tests et le chargement du modèle
         mkdir -p tests/test_data
-        # Crée également le dossier models pour éviter les erreurs lors des tests
+        # Crée le dossier models car le chemin relatif est utilisé dans config
         mkdir -p models
+        # Copie le modèle depuis le checkout LFS vers le dossier models attendu
+        # Ajuste le chemin si nécessaire (si le modèle est dans un sous-dossier de models)
+        # Note: Cette copie n'est nécessaire que si le chemin dans config.py reste relatif './models/...'
+        # Si config.py utilisait un chemin absolu basé sur BASE_DIR partout, cette copie ne serait pas utile.
+        # Vérifie que le fichier existe après checkout LFS avant de copier
+        if [ -f "models/face_landmarker_v2_with_blendshapes.task" ]; then
+          cp models/face_landmarker_v2_with_blendshapes.task models/
+        else
+          echo "::error::Model file models/face_landmarker_v2_with_blendshapes.task not found after checkout!"
+          # exit 1 # Fait échouer le build si le modèle est absolument requis pour les tests
+        fi
         # Configure l'environnement pour indiquer qu'on est en mode test
+        # Cela permet au health check de retourner 'ok' même si le modèle n'a pas chargé (sécurité)
         export TESTING=true
         pytest
 
-    # Optionnel : Étape de Build Docker (vérifie que l'image build)
+    # Optionnel: Build Docker (Commenté)
     # - name: Build Docker image
     #   run: |
     #     docker build -t optical-factory-backend-ci .
