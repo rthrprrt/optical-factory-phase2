@@ -2,32 +2,38 @@
 
 [![Python Backend CI](https://github.com/rthrprrt/optical-factory-phase2/actions/workflows/python-ci.yml/badge.svg)](https://github.com/rthrprrt/optical-factory-phase2/actions/workflows/python-ci.yml)
 
-API Backend RESTful pour le projet de Master "Optical Factory", développée avec Python et FastAPI. Fournit des fonctionnalités pour l'**analyse faciale (pose 3D, landmarks, forme simplifiée)** et la **recommandation de lunettes** pour une application d'essayage virtuel. **Le rendu 3D est délégué au client (frontend).**
+A RESTful backend API for the "Optical Factory" Master's project, developed using Python and FastAPI. It provides robust facial analysis capabilities (3D pose, landmarks, simplified shape classification) and glasses recommendation logic, designed to power a virtual try-on application. **Note:** 3D rendering is handled client-side; this API provides the necessary analysis data.
 
-## Fonctionnalités Principales de l'API
+## Core API Features
 
-*   **Analyse Faciale (`/api/v1/analyze_face`) :** Prend une image en entrée et retourne :
-    *   Le succès de la détection.
-    *   La matrice de transformation de pose 3D (4x4).
-    *   Les coordonnées des landmarks faciaux (468+ points).
-    *   Une classification simplifiée de la forme du visage (long, proportionné, autre).
-    *   Un message d'erreur le cas échéant.
-*   **Recommandation (`/api/v1/recommend_glasses`) :** Prend une forme de visage (string) en entrée et retourne une liste d'IDs de modèles de lunettes suggérés.
-*   **Flux Combiné (`/api/v1/analyze_and_recommend`) :** Prend une image en entrée, effectue l'analyse, et retourne à la fois les résultats de l'analyse et les recommandations basées sur la forme détectée.
-*   **(Optionnel) Liste des Modèles (`/api/v1/list_models`) :** Peut être ajouté pour lister les IDs des modèles 3D connus du backend.
+*   **Facial Analysis (`POST /api/v1/analyze_face`):**
+    *   Accepts an image file (`multipart/form-data`).
+    *   Returns a JSON (`FaceAnalysisResult`) containing:
+        *   `detection_successful` (boolean).
+        *   `facial_transformation_matrix` (4x4 float list): The crucial 3D pose matrix of the detected face relative to the camera. **Essential for client-side rendering.**
+        *   `face_landmarks` (list of {x, y, z} objects): Detailed 470+ facial landmark coordinates. **Useful for fine-tuning placement or effects on the client.**
+        *   `detected_face_shape` (string: "long", "proportionate", "other", "unknown", or error): Simplified shape classification based on landmarks.
+        *   `error_message` (string or null).
+*   **Glasses Recommendation (`POST /api/v1/recommend_glasses`):**
+    *   Accepts a face shape (string in JSON body, e.g., `{ "face_shape": "long" }`).
+    *   Returns a JSON (`RecommendationResult`) containing `recommended_glasses_ids` (list of strings) and `analysis_info` (string).
+*   **Combined Workflow (`POST /api/v1/analyze_and_recommend`):**
+    *   Accepts an image file.
+    *   Performs full analysis and returns both the `FaceAnalysisResult` and `RecommendationResult` in a single JSON response (`AnalyzeAndRecommendResult`).
+*   **Health Check (`GET /health`):** Verifies API availability and Mediapipe model load status.
 
-## Architecture
+*Detailed API specification and interactive testing available via Swagger UI at the `/docs` endpoint.*
 
-L'application utilise FastAPI et suit une structure modulaire axée sur l'analyse et la recommandation. Le rendu 3D est exclu du backend.
+## Architecture Overview
 
-*   **API Endpoints (`src/api/endpoints.py`) :** Exposition des routes REST (`/analyze_face`, `/recommend_glasses`, etc.).
-*   **Core Logic (`src/core/`) :** Contient la logique métier pour le traitement (`processing.py` - analyse, forme, reco) et la gestion des modèles (`models.py` - chargement Mediapipe, liste IDs 3D).
-*   **Configuration (`src/core/config.py`) :** Gère les paramètres via un fichier `.env`.
-*   **Schemas (`src/schemas/schemas.py`) :** Modèles Pydantic pour la validation API.
+This backend leverages FastAPI for a high-performance, asynchronous API with automatic data validation (Pydantic) and OpenAPI documentation. The modular structure (`src/api`, `src/core`, `src/schemas`) promotes maintainability.
 
-Voir [ARCHITECTURE.md](ARCHITECTURE.md) pour une description détaillée de l'architecture backend finale.
+*   **Key Components:** FastAPI application (`main.py`), API route definitions (`endpoints.py`), core processing logic (`processing.py`), Mediapipe model loading (`models.py`), configuration management (`config.py`, `.env`), Pydantic schemas (`schemas.py`).
+*   **3D Rendering:** Explicitly **delegated to the client application**. The backend focuses solely on providing accurate analysis data (pose matrix, landmarks).
 
-## Technologies Utilisées (Backend)
+*Refer to [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed system diagram and description.*
+
+## Technologies (Backend)
 
 *   Python 3.10+
 *   FastAPI & Uvicorn
@@ -38,72 +44,97 @@ Voir [ARCHITECTURE.md](ARCHITECTURE.md) pour une description détaillée de l'ar
 *   Docker
 *   Git & Git LFS
 *   GitHub Actions
-*   NumPy, Pathlib
+*   NumPy
 
-*(Note: Pyrender, Trimesh, Pillow ont été retirés)*
+## For Frontend Developers: Using the API
 
-## Pour l'Équipe Frontend : Utilisation de l'API
+1.  **API Endpoint:** Get the deployed API URL (e.g., `https://<your-app>.onrender.com`) or use `http://localhost:8000` for local backend instances.
+2.  **API Docs:** Access `<API_URL>/docs` for detailed endpoint information.
+3.  **Virtual Try-On Flow:**
+    *   Capture a webcam frame/image.
+    *   Send the image to `POST /api/v1/analyze_face`.
+    *   On successful response (`detection_successful: true`), retrieve the `facial_transformation_matrix` (4x4 list) and `face_landmarks` (list of {x,y,z}).
+    *   **(Optional)** Get recommendations via `POST /api/v1/recommend_glasses` using the `detected_face_shape`.
+    *   **Client-Side Rendering (e.g., using Three.js/WebGL):**
+        *   Load the desired 3D glasses model (e.g., a `.glb` file corresponding to a recommended ID).
+        *   Display the webcam feed as a background.
+        *   Set up your 3D scene and virtual camera.
+        *   **Apply the `facial_transformation_matrix`** received from the API to the transform (position and rotation) of your 3D glasses object in the scene. *Note: Coordinate system differences between Mediapipe (often OpenGL-like) and your 3D library (e.g., Three.js/WebGL) might require adjustments or matrix conversions.* A local offset might also be needed for precise fitting on the nose.
+        *   Use the `face_landmarks` for optional debugging visualization or advanced fitting/deformation.
+        *   Render your 3D scene over the webcam feed.
+4.  **3D Models:** Obtain the 3D model files (e.g., `.glb`, `.obj`) corresponding to the `recommended_glasses_ids`. These are stored in the `models/sunglass` directory of this repository but need to be hosted or bundled with the frontend application.
 
-1.  **Récupérer l'URL de l'API :** Obtenez l'URL du backend (soit `http://localhost:8000` si lancé localement, soit l'URL publique si déployé sur Render/autre).
-2.  **Consulter la Documentation :** Allez sur `<URL_API>/docs` pour voir les détails des endpoints, les formats JSON attendus et les réponses.
-3.  **Flux d'Essayage Virtuel Côté Client :**
-    *   Capturez une image/frame de la webcam.
-    *   Envoyez cette image à l'endpoint `POST /api/v1/analyze_face` (ou `/analyze_and_recommend`).
-    *   Récupérez la réponse JSON. Vérifiez `detection_successful`.
-    *   Si succès, extrayez :
-        *   `facial_transformation_matrix` (matrice 4x4).
-        *   `face_landmarks` (liste de {x, y, z}).
-        *   `detected_face_shape` (string).
-    *   **(Optionnel)** Appelez `POST /api/v1/recommend_glasses` avec la `detected_face_shape` pour obtenir les `recommended_glasses_ids`.
-    *   **Chargez le modèle 3D** correspondant à l'ID souhaité (ex: un fichier `.glb` que vous hébergez ou récupérez).
-    *   **Utilisez une bibliothèque 3D Web (Three.js, Babylon.js) :**
-        *   Affichez le flux vidéo de la webcam en arrière-plan.
-        *   Créez une scène 3D et une caméra virtuelle qui correspondent (approximativement) à la caméra réelle.
-        *   Chargez le modèle 3D des lunettes.
-        *   **Appliquez la `facial_transformation_matrix`** reçue de l'API à la position/rotation du modèle 3D des lunettes dans votre scène 3D. (Attention aux conversions de systèmes de coordonnées si nécessaire entre Mediapipe et votre moteur 3D). Vous devrez peut-être aussi appliquer un offset local au modèle 3D pour l'ajuster parfaitement (nez, oreilles).
-        *   Effectuez le rendu de la scène 3D par-dessus la vidéo webcam.
+## Getting Started (Backend Development)
 
-## Installation et Lancement (Backend)
+### Prerequisites
 
-### Prérequis
+*   Python 3.10+ and Pip
+*   Git client
+*   Git LFS ([Install Git LFS](https://git-lfs.com/))
+*   (Optional) Docker Desktop
 
-*   Python 3.10+ et Pip
-*   Git et Git LFS
-*   (Optionnel) Docker Desktop
+### Local Setup
 
-### Lancement Local (Développement avec Uvicorn)
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/rthrprrt/optical-factory-phase2.git
+    cd optical-factory-phase2
+    ```
+2.  Install LFS files:
+    ```bash
+    git lfs pull
+    ```
+3.  Create a virtual environment (recommended):
+    ```bash
+    python -m venv venv
+    # Activate: .\venv\Scripts\Activate.ps1 (PowerShell) or source venv/bin/activate (Bash)
+    ```
+4.  Install dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+5.  Create `.env` file:
+    *   Copy `.env.example` to `.env`.
+    *   Verify `FACE_MODEL_PATH` and other settings if needed.
+6.  Run the FastAPI server:
+    ```bash
+    uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+    ```
+7.  Access the API at `http://localhost:8000` and docs at `http://localhost:8000/docs`.
 
-1.  `git clone https://github.com/rthrprrt/optical-factory-phase2.git`
-2.  `cd optical-factory-phase2`
-3.  `git lfs pull`
-4.  `python -m venv venv`
-5.  `.\venv\Scripts\Activate.ps1` (ou `source venv/bin/activate`)
-6.  `pip install -r requirements.txt` (Utilisez le `requirements.txt` **nettoyé**)
-7.  Créez `.env` (voir `.env.example`). Assurez-vous que `FACE_MODEL_PATH` est correct.
-8.  `uvicorn src.main:app --reload --host 0.0.0.0 --port 8000`
-9.  Accédez à `http://localhost:8000/docs`.
+### Docker Setup
 
-### Lancement via Docker
+1.  Ensure Docker Desktop is running.
+2.  Clone repo and install LFS (steps 1 & 2 above).
+3.  Build the Docker image:
+    ```bash
+    docker build -t optical-factory-backend .
+    ```
+4.  Run the container (mounting `.env` for runtime configuration):
+    ```bash
+    docker run --rm -p 8000:8000 --env-file .env --name optical-factory-app optical-factory-backend
+    ```
+5.  Access the API at `http://localhost:8000`.
 
-1.  Assurez-vous que Docker est lancé.
-2.  Clonez le dépôt et installez LFS (voir ci-dessus).
-3.  Construisez l'image (utilisez le `Dockerfile` **nettoyé**) : `docker build -t optical-factory-backend .`
-4.  Lancez le conteneur : `docker run --rm -p 8000:8000 --env-file .env --name optical-factory-app optical-factory-backend`
-5.  Accédez à `http://localhost:8000`.
+## Running Tests
 
-## Tests
+1.  Install dependencies (`pytest` and `httpx` are included).
+2.  (Optional) Place test images in `tests/test_data/` (see `tests/test_api.py` for details).
+3.  Run from the project root:
+    ```bash
+    pytest
+    ```
 
-1.  Installez les dépendances (`pip install -r requirements.txt`).
-2.  Placez des images de test valides dans `tests/test_data/` si nécessaire (voir `tests/test_api.py`).
-3.  Exécutez depuis la racine : `pytest`
+## Running Benchmark
 
-## Benchmark
+1.  Ensure the API server is running.
+2.  Place test images in `benchmark/test_data/`.
+3.  Run from the project root as a module:
+    ```bash
+    python -m benchmark.optical_factory_evaluation
+    ```
+4.  Results are printed and saved to `benchmark/evaluation_results.json`.
 
-1.  Assurez-vous que le serveur API est lancé.
-2.  Placez des images de test dans `benchmark/test_data/`.
-3.  Exécutez depuis la racine : `python -m benchmark.optical_factory_evaluation`
-4.  Résultats dans la console et `benchmark/evaluation_results.json`.
+## Continuous Integration (CI)
 
-## Intégration Continue (CI)
-
-Workflow GitHub Actions (`.github/workflows/python-ci.yml`) exécute `pytest`.
+A GitHub Actions workflow (`.github/workflows/python-ci.yml`) automatically runs `pytest` on push/pull_request to main branches, including Git LFS checkout.
